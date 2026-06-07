@@ -31,7 +31,7 @@ PRICE_AREA_W = 57
 PRICE_AREA_H = 376
 
 # Параметры сайдбара
-SCROLLBAR_X = 1390
+SCROLLBAR_X = 1392
 SCROLLBAR_Y = 347
 SCROLL_STEP = 80  # шаг прокрутки в пикселях
 
