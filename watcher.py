@@ -1,105 +1,352 @@
-import subprocess
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
+import mss
+import easyocr
+import ctypes
 import time
+import random
+import cv2
+import numpy as np
+import re
+from PIL import Image
+import keyboard
+import traceback
+from threading import Thread
 import os
 import sys
-import ctypes
+import torch
+import pyautogui
 
+pyautogui.FAILSAFE = False
+SEARCH_BUTTON_BASE = None
+WORKING = True
+
+ITEMS_FILE = "items_save.txt"
 RESTART_SIGNAL_FILE = "restart_signal.txt"
 
-def restore_game():
-    """Разворачивает окно игры"""
-    try:
-        hwnd = ctypes.windll.user32.FindWindowW(None, 'STALCRAFT')
-        if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
-            time.sleep(0.5)
-            return True
-    except:
-        pass
-    return False
+PRICE_AREA_X = 1251
+PRICE_AREA_Y = 390
+PRICE_AREA_W = 57
+PRICE_AREA_H = 376
 
-def minimize_game():
-    """Сворачивает окно игры"""
-    try:
-        hwnd = ctypes.windll.user32.FindWindowW(None, 'STALCRAFT')
-        if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
-            time.sleep(0.5)
-            return True
-    except:
-        pass
-    return False
+PAGE2_X = 1014
+PAGE2_Y = 768
 
-def run_bot():
-    """Запускает бота"""
-    print("🚀 Запуск бота...")
+LIFE_CHECK_AREA_X = 507
+LIFE_CHECK_AREA_Y = 238
+LIFE_CHECK_AREA_W = 96
+LIFE_CHECK_AREA_H = 36
+life_check_template = cv2.imread('blueprints/life_check_area.png', cv2.IMREAD_GRAYSCALE)
+
+print(f"Область цен: X={PRICE_AREA_X}, Y={PRICE_AREA_Y}, W={PRICE_AREA_W}, H={PRICE_AREA_H}")
+
+print("Загрузка EasyOCR...")
+print(f"CUDA: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+reader = easyocr.Reader(['en'], gpu=True, model_storage_directory='easyocr_models')
+print("OCR готов!")
+
+WM_KEYUP = 0x0100
+BACKSPACE_VIRTUAL_CODE = 0x08
+window_handle = ctypes.windll.user32.FindWindowW(None, 'STALCRAFT')
+
+templates = {}
+template_files = {
+    'auction': 'blueprints/auctionRecognition.png',
+    'buyout': 'blueprints/buyoutRecognition.png',
+    'search': 'blueprints/searchRecognition.png',
+    'buy': 'blueprints/buyRecognition.png',
+}
+for name, path in template_files.items():
+    templates[name] = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if templates[name] is None:
+        print(f"Ошибка: шаблон {path} не загружен")
+
+sct = mss.mss()
+monitor = sct.monitors[1]
+
+def save_items(items):
+    with open(ITEMS_FILE, "w", encoding="utf-8") as f:
+        for name, price in items:
+            f.write(f"{name}|{price}\n")
+    print(f"💾 Сохранено: {len(items)}")
+
+def load_items():
+    items = []
+    if os.path.exists(ITEMS_FILE):
+        with open(ITEMS_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("|")
+                if len(parts) == 2:
+                    items.append([parts[0], int(parts[1])])
+        print(f"📂 Загружено: {len(items)}")
+    return items
+
+def quick_click():
+    pyautogui.click()
+    time.sleep(0.001)
+
+def imageRecognitionFast(template, screenshot_gray):
+    result = cv2.matchTemplate(screenshot_gray, template, cv2.TM_SQDIFF_NORMED)
+    mn, _, mnLoc, _ = cv2.minMaxLoc(result)
+    return mnLoc
+
+def get_screenshot():
+    screenshot = sct.grab(monitor)
+    screenshot_rgb = np.array(screenshot)
+    screenshot_gray = cv2.cvtColor(screenshot_rgb, cv2.COLOR_BGR2GRAY)
+    return screenshot_rgb, screenshot_gray
+
+def initAuction(name=""):
+    screen_x = pyautogui.size().width // 2
+    screen_y = pyautogui.size().height // 2
+    pyautogui.click(screen_x, screen_y)
+    time.sleep(0.3)
     
-    # Перед запуском разворачиваем игру
-    restore_game()
+    pyautogui.press('P')
+    time.sleep(0.3)
     
-    process = subprocess.Popen(
-        [sys.executable, "main.py"],
-        stdout=None,
-        stderr=None,
-        text=False
-    )
+    for attempt in range(5):
+        _, screenshot_gray = get_screenshot()
+        aucX, aucY = imageRecognitionFast(templates['auction'], screenshot_gray)
+        if aucX != 0 and aucY != 0:
+            pyautogui.moveTo(random.randint(aucX+30, aucX+50), random.randint(aucY+3, aucY+10), 0.01)
+            quick_click()
+            print("  ✅ Аукцион открыт")
+            time.sleep(0.3)
+            break
+        time.sleep(0.5)
     
-    while True:
-        if os.path.exists(RESTART_SIGNAL_FILE):
-            os.remove(RESTART_SIGNAL_FILE)
-            print("🔄 Получен сигнал перезапуска!")
-            process.terminate()
-            time.sleep(1)
-            
-            # Сворачиваем игру перед перезапуском
-            print("📦 Сворачиваю игру...")
-            minimize_game()
-            time.sleep(1)
-            
+    if name:
+        print(f"  📝 Вписываю: {name}")
+        time.sleep(0.2)
+        _, gray = get_screenshot()
+        X, Y = imageRecognitionFast(templates['search'], gray)
+        if X == 0 and Y == 0:
+            print("  ❌ Кнопка поиска не найдена")
             return False
         
-        if process.poll() is not None:
-            break
+        x = random.randint(X-17, X-11)
+        y = random.randint(Y+2, Y+13)
+        pyautogui.moveTo(x, y, 0.01)
+        quick_click()
+        time.sleep(0.1)
         
-        time.sleep(0.5)
+        for _ in range(random.randint(40, 55)):
+            ctypes.windll.user32.SendMessageW(window_handle, WM_KEYUP, BACKSPACE_VIRTUAL_CODE, 0)
+            time.sleep(0.001)
+        for ch in name:
+            ctypes.windll.user32.SendMessageW(window_handle, 0x0102, ord(ch), 0)
+            time.sleep(0.001)
+        
+        searchClick()
+        time.sleep(0.15)
+        sort_by_price()
+        print(f"  ✅ Готово: {name}")
+        pyautogui.moveTo(1000, 1000, 0.01)
+        time.sleep(0.17)
+        go_to_page2()
     
     return True
 
-def main():
-    print("=" * 50)
-    print("🛡️ НАДЗИРАТЕЛЬ БОТА")
-    print("=" * 50)
-    print("Надзиратель запущен. Бот будет перезапускаться при проблемах")
-    print("Нажми Ctrl+C в этом окне для остановки")
-    print("=" * 50)
+def sort_by_price():
+    _, screenshot_gray = get_screenshot()
+    X, Y = imageRecognitionFast(templates['buyout'], screenshot_gray)
+    if X == 0 and Y == 0:
+        return False
+    click_x = random.randint(X+5, X+50)
+    click_y = random.randint(Y+3, Y+15)
+    pyautogui.moveTo(click_x, click_y, 0.01)
+    quick_click()
+    time.sleep(0.1)
+    quick_click()
+    print("  📊 Сортировка")
+    time.sleep(0.3)
+    return True
+
+def go_to_page2():
+    """Клик точно по координатам второй страницы"""
+    time.sleep(0.05)
+    pyautogui.click(PAGE2_X, PAGE2_Y)
+    time.sleep(0.05)
+    print("  📄 Страница 2")
+
+def is_life_check_area_visible():
+    with mss.mss() as sct:
+        monitor = {"top": LIFE_CHECK_AREA_Y, "left": LIFE_CHECK_AREA_X,
+                   "width": LIFE_CHECK_AREA_W, "height": LIFE_CHECK_AREA_H}
+        screenshot = sct.grab(monitor)
+        screenshot_gray = cv2.cvtColor(np.array(screenshot), cv2.COLOR_BGR2GRAY)
+    result = cv2.matchTemplate(screenshot_gray, life_check_template, cv2.TM_SQDIFF_NORMED)
+    min_val, _, _, _ = cv2.minMaxLoc(result)
+    return min_val < 0.1
+
+def searchClick():
+    global SEARCH_BUTTON_BASE
+    if SEARCH_BUTTON_BASE is None:
+        _, screenshot_gray = get_screenshot()
+        X, Y = imageRecognitionFast(templates['search'], screenshot_gray)
+        if X == 0 and Y == 0:
+            return False
+        SEARCH_BUTTON_BASE = (X, Y)
+    X, Y = SEARCH_BUTTON_BASE
+    x = random.randint(X+3, X+40)
+    y = random.randint(Y+4, Y+13)
+    time.sleep(0.2)
+    pyautogui.click(x, y)
+    return True
+
+def refresh_and_go_page2():
+    searchClick()
+    time.sleep(0.1)
+    go_to_page2()
+
+def find_first_price(img_rgb):
+    price_area = img_rgb[PRICE_AREA_Y:PRICE_AREA_Y+PRICE_AREA_H, 
+                         PRICE_AREA_X:PRICE_AREA_X+PRICE_AREA_W]
+    results = reader.readtext(price_area, detail=1, paragraph=False, allowlist='0123456789')
     
-    if os.path.exists(RESTART_SIGNAL_FILE):
-        os.remove(RESTART_SIGNAL_FILE)
+    if not results:
+        return "empty"
     
-    restart_count = 0
+    for (bbox, text, confidence) in results:
+        digits = re.sub(r'[^0-9]', '', text)
+        if not digits:
+            continue
+        price = int(digits)
+        if price < 1000 and len(text) > len(digits) + 1:
+            price = price * 1000
+        if price == 999999 or price > 1000000:
+            print(f"    ⚠️ Мусорная цена: {price}")
+            continue
+        x1, y1 = bbox[0]
+        x2, y2 = bbox[2]
+        center_x = PRICE_AREA_X + (x1 + x2) // 2
+        center_y = PRICE_AREA_Y + (y1 + y2) // 2
+        print(f"    🔍 Цена: '{text}' -> {price}")
+        return price, center_x, center_y
     
-    while True:
-        try:
-            print(f"\n📌 Запуск бота (перезапуск #{restart_count})")
+    print(f"    ⚠️ Все цены мусорные")
+    return "garbage"
+
+def buy_full_process(click_x, click_y):
+    pyautogui.moveTo(click_x, click_y, 0.01)
+    quick_click()
+    print("  💰 Клик по цене")
+    time.sleep(0.15)
+    _, gray = get_screenshot()
+    X, Y = imageRecognitionFast(templates['buy'], gray)
+    if X == 0 and Y == 0:
+        print("  ❌ Кнопка 'Купить' не найдена")
+        return False
+    buy_x = random.randint(X+5, X+60)
+    buy_y = random.randint(Y+5, Y+20)
+    pyautogui.moveTo(buy_x, buy_y, 0.01)
+    time.sleep(0.05)
+    quick_click()
+    print("  🛒 Купить")
+    time.sleep(0.12)
+    pyautogui.press('esc')
+    print("  🔚 ESC")
+    time.sleep(0.03)
+    return True
+
+def exit_check():
+    global WORKING
+    while WORKING:
+        if keyboard.is_pressed("f1"):
+            WORKING = False
+            break
+        time.sleep(0.01)
+
+def refresh_auction():
+    """Обновление аукциона = клик по странице 2"""
+    go_to_page2()
+
+def auction_cycle(name, limit, is_first_search=False):
+    if is_first_search:
+        initAuction(name)  # Тут используется поиск для ввода названия
+    else:
+        refresh_auction()  # Только клик по странице 2
+    
+    while WORKING:
+        rgb, _ = get_screenshot()
+        result = find_first_price(rgb)
+        
+        if not is_life_check_area_visible():
+            initAuction(name)
+            print("  🚨 Life check!")
+            time.sleep(0.3)
+            continue
+        
+        if result not in ["empty", "garbage", None]:
+            price, click_x, click_y = result
+            print(f"  📋 Цена: {price} (лимит {limit})")
             
-            success = run_bot()
-            
-            if not success:
-                restart_count += 1
-                print(f"🔄 Перезапускаю бота... (всего: {restart_count})")
-                time.sleep(2)
+            if price >= 1000000:
+                pyautogui.press('esc')
+                time.sleep(0.2)
+                initAuction(name)
                 continue
             
-            print("✅ Бот завершил работу нормально")
-            break
-            
-        except KeyboardInterrupt:
-            print("\n🛑 Надзиратель остановлен")
-            break
-        except Exception as e:
-            print(f"❌ Ошибка надзирателя: {e}")
-            time.sleep(3)
+            if price <= limit:
+                buy_full_process(click_x, click_y)
+                print(f"🎉 КУПИЛ {name} за {price}!")
+                return True
+            else:
+                print(f"  ❌ {price} > {limit}")
+                refresh_auction()
+        else:
+            refresh_auction()
+        
+        time.sleep(0.03)
+    
+    return False
+
+def main():
+    global WORKING
+    print("=" * 50)
+    print("⚡ БОТ STALCRAFT ⚡")
+    print("F1 - СТОП")
+    print("=" * 50)
+    
+    items = load_items()
+    if not items:
+        cnt = int(input('Сколько предметов: '))
+        for i in range(cnt):
+            name = input(f'Предмет {i+1}: ')
+            items.append([name, int(input(f'Лимит: '))])
+        save_items(items)
+    
+    print("старт через 3")
+    time.sleep(3)
+    Thread(target=exit_check, daemon=True).start()
+    
+    print("\n========== ПЕРВИЧНЫЙ ПОИСК ==========")
+    for name, limit in items:
+        if not WORKING: break
+        while WORKING:
+            if auction_cycle(name, limit, is_first_search=True):
+                print(f"\n✅ {name} КУПЛЕН!\n")
+                break
+            time.sleep(1)
+    
+    print("\n========== БЕСКОНЕЧНЫЙ ЦИКЛ ==========")
+    while WORKING:
+        for name, limit in items:
+            if not WORKING: break
+            print(f"\n🔄 {name}")
+            auction_cycle(name, limit)
+        time.sleep(0.05)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nСтоп")
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        traceback.print_exc()
