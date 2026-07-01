@@ -1,56 +1,72 @@
-import keyboard  # Добавьте импорт в начале файла
+================================================================
+ИТОГИ ИССЛЕДОВАНИЯ ПАМЯТИ STALCRAFT
+================================================================
 
-def initAuction(name=""):
-    screen_x = pyautogui.size().width // 2
-    screen_y = pyautogui.size().height // 2
-    pyautogui.click(screen_x, screen_y)
-    time.sleep(0.3)
-    
-    pyautogui.press('P')
-    time.sleep(0.3)
-    
-    for attempt in range(5):
-        _, screenshot_gray = get_screenshot()
-        aucX, aucY = imageRecognitionFast(templates['auction'], screenshot_gray)
-        if aucX != 0 and aucY != 0:
-            pyautogui.moveTo(random.randint(aucX+30, aucX+50), random.randint(aucY+3, aucY+10), 0.01)
-            quick_click()
-            print("  ✅ Аукцион открыт")
-            time.sleep(0.3)
-            break
-        time.sleep(0.5)
-    
-    if name:
-        print(f"  📝 Вписываю: {name}")
-        time.sleep(0.2)
-        _, gray = get_screenshot()
-        X, Y = imageRecognitionFast(templates['search'], gray)
-        if X == 0 and Y == 0:
-            print("  ❌ Кнопка поиска не найдена")
-            return False
-        
-        x = random.randint(X-17, X-11)
-        y = random.randint(Y+2, Y+13)
-        pyautogui.moveTo(x, y, 0.01)
-        quick_click()
-        time.sleep(0.1)
-        
-        # === БЛОК ВВОДА С KEYBOARD ===
-        # Очистка поля
-        keyboard.press_and_release('ctrl+a')
-        time.sleep(0.05)
-        keyboard.press_and_release('delete')
-        time.sleep(0.05)
-        
-        # Ввод текста
-        keyboard.write(name, delay=0.01)  # delay - задержка между символами
-        # ================================
-        
-        searchClick()
-        time.sleep(0.15)
-        sort_by_price()
-        print(f"  ✅ Готово: {name}")
-        pyautogui.moveTo(1000,1000,0.01)
-        time.sleep(0.17)
-    
-    return True
+1. КАК ПОДКЛЮЧИТЬСЯ К ПАМЯТИ:
+   - pip install pymem
+   - from pymem import Pymem
+   - pm = Pymem("stalcraft.exe")
+
+2. КАК ИСКАТЬ ДАННЫЕ В ПАМЯТИ:
+   - Использовать VirtualQueryEx для перебора регионов памяти
+   - Искать байтовые последовательности через data.find()
+   - Фильтровать MEM_COMMIT регионы размером < 50MB
+
+3. ГДЕ ЛЕЖАТ ЛОТЫ АУКЦИОНА:
+   - Открыть ОБЩИЙ аукцион (без поиска предмета)
+   - Искать ключ: b'"id":16505' (ID предмета)
+   - Лоты лежат в регионе 0x205770000000 - 0x205780000000
+   - Адреса динамические (меняются при перезапуске игры)
+
+4. СТРУКТУРА ЛОТА:
+   - Смещение 0-7:     ID или указатель (int64)
+   - Смещение 8-15:    Индекс в массиве (int64) - у P_A_M_P: 18,25,30,34,38,43,64,75,86,95
+   - Смещение 48-55:   Начало строки с ником продавца
+   - Смещение 56+:     Имя продавца + "undefined..@y..MASTER."
+   - Смещение 84+:     JSON: {"id":16505,"stackSize":1,"itemDamage":0,...}
+   - Смещение +95:     ЦЕНА (int32 BIG-ENDIAN!) ← САМОЕ ВАЖНОЕ
+
+5. КАК ЧИТАТЬ ЦЕНУ:
+   data = pm.read_bytes(адрес_лота + 95, 4)
+   price = int.from_bytes(data, 'big')  # ВАЖНО: big-endian!
+   
+   Пример:
+   LE = 9,490,435 → BE = 64,000,000
+   
+   Проверено на 10 лотах P_A_M_P - все показывают 64,000,000 ✓
+
+6. КАК НАЙТИ ЛОТЫ ПО ПРОДАВЦУ:
+   - Искать ник продавца (например b'P_A_M_P') в памяти
+   - Каждый найденный адрес = лот этого продавца
+
+7. ДАННЫЕ ПОЧТЫ (история продаж):
+   - Искать b'mail.message.success_buy'
+   - Там есть: seller (stackName), buyer (buyer.value), item ID, stackSize, цена (amount)
+   - Формат цены в почте: "currencies":[{"id":"money","amount":6840000}] - обычный int, не big-endian
+
+8. БИНАРНЫЙ ФОРМАТ ДАННЫХ:
+   - Игра использует бинарный протокол с JSON-вставками
+   - Разделители: нулевые байты (0x00)
+   - Строки в UTF-8
+   - Числа в little-endian, НО ЦЕНА в big-endian
+
+9. ИНСТРУМЕНТЫ ДЛЯ СКАНИРОВАНИЯ:
+   - VirtualQueryEx - перебор регионов
+   - data.find(b'pattern') - поиск байтов
+   - int.from_bytes(data, 'little'/'big') - чтение чисел
+   - struct.pack/unpack - float/double
+   - re.search(br'pattern', data) - поиск байтовых паттернов
+
+10. ЧТО НЕ НАЙДЕНО:
+    - Статический адрес (меняется при перезапуске)
+    - Прямые указатели на лоты (pointer scan дал 0 результатов)
+    - CEF DevTools (порт 9222 закрыт)
+    - buyout/price в JSON (цена в бинарной части, не в JSON)
+
+11. ДЛЯ БОТА (ПРАКТИЧЕСКОЕ ПРИМЕНЕНИЕ):
+    - При старте: просканировать память, найти все лоты
+    - Для каждого лота: прочитать цену (offset +95, big-endian)
+    - Найти минимальную цену → купить
+    - Без OCR, без скролла, мгновенно
+
+================================================================
