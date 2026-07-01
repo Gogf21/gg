@@ -1,0 +1,54 @@
+def initAuction(name=""):
+    screen_x = pyautogui.size().width // 2
+    screen_y = pyautogui.size().height // 2
+    pyautogui.click(screen_x, screen_y)
+    time.sleep(0.3)
+    
+    pyautogui.press('P')
+    time.sleep(0.3)
+    
+    for attempt in range(5):
+        _, screenshot_gray = get_screenshot()
+        aucX, aucY = imageRecognitionFast(templates['auction'], screenshot_gray)
+        if aucX != 0 and aucY != 0:
+            pyautogui.moveTo(random.randint(aucX+30, aucX+50), random.randint(aucY+3, aucY+10), 0.01)
+            quick_click()
+            print("  ✅ Аукцион открыт")
+            time.sleep(0.3)
+            break
+        time.sleep(0.5)
+    
+    if name:
+        print(f"  📝 Вписываю: {name}")
+        time.sleep(0.2)
+        _, gray = get_screenshot()
+        X, Y = imageRecognitionFast(templates['search'], gray)
+        if X == 0 and Y == 0:
+            print("  ❌ Кнопка поиска не найдена")
+            return False
+        
+        x = random.randint(X-17, X-11)
+        y = random.randint(Y+2, Y+13)
+        pyautogui.moveTo(x, y, 0.01)
+        quick_click()
+        time.sleep(0.1)
+        
+        # === НОВЫЙ БЛОК ВВОДА (без ctypes) ===
+        # Очистка поля
+        pyautogui.hotkey('ctrl', 'a')
+        time.sleep(0.05)
+        pyautogui.press('delete')
+        time.sleep(0.05)
+        
+        # Ввод текста
+        pyautogui.write(name, interval=0.01)  # interval регулирует скорость ввода
+        # =====================================
+        
+        searchClick()
+        time.sleep(0.15)
+        sort_by_price()
+        print(f"  ✅ Готово: {name}")
+        pyautogui.moveTo(1000,1000,0.01)
+        time.sleep(0.17)
+    
+    return True
