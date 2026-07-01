@@ -1,3 +1,5 @@
+import keyboard  # Добавьте импорт в начале файла
+
 def initAuction(name=""):
     screen_x = pyautogui.size().width // 2
     screen_y = pyautogui.size().height // 2
@@ -33,16 +35,16 @@ def initAuction(name=""):
         quick_click()
         time.sleep(0.1)
         
-        # === НОВЫЙ БЛОК ВВОДА (без ctypes) ===
+        # === БЛОК ВВОДА С KEYBOARD ===
         # Очистка поля
-        pyautogui.hotkey('ctrl', 'a')
+        keyboard.press_and_release('ctrl+a')
         time.sleep(0.05)
-        pyautogui.press('delete')
+        keyboard.press_and_release('delete')
         time.sleep(0.05)
         
         # Ввод текста
-        pyautogui.write(name, interval=0.01)  # interval регулирует скорость ввода
-        # =====================================
+        keyboard.write(name, delay=0.01)  # delay - задержка между символами
+        # ================================
         
         searchClick()
         time.sleep(0.15)
